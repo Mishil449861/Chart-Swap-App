@@ -58,9 +58,10 @@ Use .gitignore to keep them private.
 ✓ Interactive Streamlit interface
 
 **Architecture Overview**
+
 The system uses a pipeline of specialized agents:
 
-1. SafetyAgent
+**1. SafetyAgent**
 
 Ensures all generated Python code is safe before running.
 
@@ -76,7 +77,7 @@ Infinite loops
 
 Long sleep timers
 
-2. IntentAgent
+**2. IntentAgent**
 
 Extracts user intent from natural language.
 
@@ -88,7 +89,7 @@ Examples:
 
 “Sort bars descending”
 
-4. DataExtractorAgent
+**3. DataExtractorAgent**
 
 Parses messy OCR text into clean structured data:
 
@@ -100,7 +101,7 @@ Units
 
 Categories
 
-4. PlanningAgent
+**4. PlanningAgent**
 
 Decides next steps:
 
@@ -114,13 +115,13 @@ Execute Python
 
 Enhance final chart
 
-5. CodeGeneratorAgent
+**5. CodeGeneratorAgent**
 
 Uses an LLM to create clean matplotlib code.
 
 Outputs pure Python, not markdown.
 
-6. DebugAgent
+**6. DebugAgent**
 
 When execution errors occur:
 
@@ -130,7 +131,7 @@ Analyzes intent
 
 Regenerates fixed code
 
-7. ExecutionAgent
+**7. ExecutionAgent**
 
 Runs code in a secure subprocess
 
@@ -140,11 +141,11 @@ Timeouts protect against hangs
 
 Returns the generated image
 
-8. ChartQualityAgent
+**8. ChartQualityAgent**
 
 Resaves the image at higher DPI for clarity.
 
-9. AgentStack
+**9. AgentStack**
 
 The orchestrator tying all agents together.
 
