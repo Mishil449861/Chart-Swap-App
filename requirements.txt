@@ -1,0 +1,11 @@
+pillow
+pandas
+google-cloud-vision
+google-generativeai
+matplotlib
+python-dotenv
+numpy
+tk
+pytz
+protobuf==4.25.3
+	
