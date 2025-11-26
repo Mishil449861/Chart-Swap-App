@@ -234,26 +234,47 @@ class CodeGeneratorAgent:
         except Exception:
             self.model = None
 
-    def _generate_from_structured(self, data: Dict[str, Any], intent: Dict[str, Any], ocr_text: str = "") -> str:
+    def _generate_from_structured(self, data: Dict[str, Any], intent: Dict[str, Any], ocr_text: str = "", image_path: str = None) -> str:
         labels = data.get("labels", [])
         values = data.get("values", [])
         meta = data.get("meta", {})
-        summary = f"Title: {meta.get('title')}\nLabels: {labels}\nValues: {values}\nIntent: {intent}\nOCR snippet: {ocr_text[:500]}"
+        
+        # Updated summary to include visual instructions
+        summary = f"Title: {meta.get('title')}\nLabels: {labels}\nValues from OCR (may be unreliable): {values}\nIntent: {intent}\nOCR snippet: {ocr_text[:500]}"
+        
         system_prompt = f"""
-You are an expert Python matplotlib assistant. Produce runnable Python code that uses matplotlib to create a chart.
+You are an expert Python matplotlib assistant. Produce runnable Python code that uses matplotlib to recreate the attached chart as faithfully as possible.
+
+CRITICAL INSTRUCTIONS FOR VISUAL ACCURACY:
+1. VISION OVER OCR: Look at the provided image. Use it as the PRIMARY SOURCE OF TRUTH for data values, colors, and markers. The OCR data provided is likely inaccurate for 3D charts.
+2. COLORS: Match the line colors from the image exactly (e.g., if a line is green in the image, make it green in the code), unless the Intent explicitly changes it.
+3. DATA ESTIMATION: Visually estimate the y-values for each point relative to the grid lines in the image.
+4. INTENT: Apply the user's intent modification: {intent}
+
 Requirements:
 - Use only matplotlib (and numpy if necessary).
 - Do not include backticks or markdown.
-- Define the data arrays explicitly if possible, e.g., labels = [...].
-- Apply user's intent (intent: {intent})
+- Define the data arrays explicitly using your visual estimates.
 - Keep code concise and save the result to a PNG using plt.savefig(output_path)
 - Do not write files other than saving the image to the provided path.
 - If you cannot follow the intent, respond with the single token: ERROR_CANNOT_FULFILL
 """
         user_prompt = f"{system_prompt}\nDATA SUMMARY:\n{summary}\n\nProduce only the python code."
+        
         if self.model:
             try:
-                response = self.model.generate_content([user_prompt])
+                # Prepare content payload for multimodal request
+                content_payload = [user_prompt]
+                
+                # If we have a valid image path, open it and attach it to the prompt
+                if image_path and os.path.exists(image_path):
+                    try:
+                        img_obj = Image.open(image_path)
+                        content_payload.append(img_obj)
+                    except Exception as img_err:
+                        print(f"Warning: Could not load image for Vision context: {img_err}")
+
+                response = self.model.generate_content(content_payload)
                 code = response.text or ""
                 return clean_code(code)
             except Exception as e:
@@ -274,15 +295,20 @@ Requirements:
             return "ERROR_CANNOT_FULFILL"
 
     def generate(self, *args, **kwargs) -> str:
+        # Support flexible arguments (args or kwargs)
         if args:
             data = args[0] if len(args) > 0 else {}
             intent = args[1] if len(args) > 1 else {}
             ocr_text = args[2] if len(args) > 2 else ""
-            return self._generate_from_structured(data or {}, intent or {}, ocr_text or "")
-        data = kwargs.get("structured_data") or kwargs.get("data") or {}
-        intent = kwargs.get("intent") or {}
-        ocr_text = kwargs.get("ocr_text") or kwargs.get("user_prompt") or ""
-        return self._generate_from_structured(data or {}, intent or {}, ocr_text or "")
+            # Try to retrieve image_path if it was passed as kwarg alongside args
+            image_path = kwargs.get("image_path")
+        else:
+            data = kwargs.get("structured_data") or kwargs.get("data") or {}
+            intent = kwargs.get("intent") or {}
+            ocr_text = kwargs.get("ocr_text") or kwargs.get("user_prompt") or ""
+            image_path = kwargs.get("image_path")
+
+        return self._generate_from_structured(data or {}, intent or {}, ocr_text or "", image_path=image_path)
 
 # ----------------------------
 # 6) DEBUG AGENT
@@ -581,7 +607,8 @@ class AgentStack:
             attempts += 1
             result["attempts"] = attempts
             try:
-                code = self.codegen.generate(data, intent, ocr_text)
+                # PASSED IMAGE PATH TO ENABLE VISION
+                code = self.codegen.generate(data, intent, ocr_text, image_path=image_path)
                 code = clean_code(code)
             except Exception as e:
                 result["error"] = f"Code generation failed: {e}"
