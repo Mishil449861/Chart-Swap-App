@@ -1,225 +1,205 @@
-# --- STEP 1: IMPORTS ---
-from agents import (SafetyAgent, DebugAgent, ChartQualityAgent, IntentAgent, DataExtractorAgent, PlanningAgent, CodeGeneratorAgent, ExecutionAgent)
-
 import tkinter as tk
-from tkinter import Entry, Button, Label, Frame, PhotoImage, END
+from tkinter import Entry, Button, Label, Frame, END, messagebox
 from PIL import Image, ImageTk, ImageGrab
 import os
 import io
 import time
 import google.generativeai as genai
-from google.cloud import vision
 from dotenv import load_dotenv
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import numpy as np
 
+# Import the updated agents
+from agents import (
+    SafetyAgent, 
+    DebugAgent, 
+    IntentAgent, 
+    DataExtractorAgent, 
+    PlanningAgent, 
+    CodeGeneratorAgent, 
+    ExecutionAgent,
+    ChartQualityAgent
+)
 
-# --- STEP 2: SETUP ---
+# --- CONFIGURATION ---
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+api_key = os.getenv("GEMINI_API_KEY")
+if api_key:
+    genai.configure(api_key=api_key)
+else:
+    print("WARNING: GEMINI_API_KEY not found in environment variables.")
 
-original_screenshot_path = "original_screenshot.png"
-current_chart_path = ""
+# Global paths
+ORIGINAL_PATH = "original_screenshot.png"
+OUTPUT_PATH = "latest_chart.png"
 
-
-# --- MAIN APPLICATION WITH MULTI AGENTS ---
 class ChartSwapApp:
     def __init__(self, root_window):
         self.root = root_window
-        self.root.title("Chart-Swap v2.0 — Multi-Agent Edition")
-        self.root.geometry("900x700")
+        self.root.title("Chart-Swap v3.0 — Intelligent Vision")
+        self.root.geometry("1000x750")
 
-        # AGENTS INITIALIZED HERE
+        # --- INITIALIZE AGENTS ---
         self.intent_agent = IntentAgent()
         self.data_agent = DataExtractorAgent()
-        self.planner_agent = PlanningAgent()
-        self.code_agent = CodeGeneratorAgent()
+        self.code_agent = CodeGeneratorAgent() 
         self.safety_agent = SafetyAgent()
         self.debug_agent = DebugAgent()
-        self.quality_agent = ChartQualityAgent()
         self.exec_agent = ExecutionAgent()
+        self.quality_agent = ChartQualityAgent()
 
-        # --- UI WIDGETS ---
-        self.image_label = Label(self.root)
-        self.image_label.pack(pady=10, expand=True)
+        # State
+        self.current_image_path = None
 
+        # --- UI LAYOUT ---
+        
+        # 1. Image Display Area
+        self.image_frame = Frame(self.root, bg="#f0f0f0", width=800, height=500)
+        self.image_frame.pack(pady=10, fill=tk.BOTH, expand=True)
+        self.image_frame.pack_propagate(False) # Prevent shrinking
+        
+        self.image_label = Label(self.image_frame, text="No Image Captured", bg="#f0f0f0", font=("Arial", 14, "bold"))
+        self.image_label.pack(expand=True)
+
+        # 2. Control Area
         control_frame = Frame(self.root)
         control_frame.pack(pady=10)
 
-        self.prompt_entry = Entry(control_frame, width=70, font=("Arial", 14))
-        self.prompt_entry.pack(side=tk.LEFT, padx=10)
+        # Prompt Entry
+        Label(control_frame, text="Instruction:").pack(side=tk.LEFT, padx=5)
+        self.prompt_entry = Entry(control_frame, width=60, font=("Arial", 12))
+        self.prompt_entry.pack(side=tk.LEFT, padx=5)
+        self.prompt_entry.bind("<Return>", lambda event: self.handle_generate())
 
-        self.submit_button = Button(control_frame, text="Go", command=self.handle_submit_prompt)
-        self.submit_button.pack(side=tk.LEFT)
+        # Generate Button
+        self.generate_btn = Button(control_frame, text="Generate Chart", command=self.handle_generate, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"))
+        self.generate_btn.pack(side=tk.LEFT, padx=10)
 
-        button_frame = Frame(self.root)
-        button_frame.pack(pady=5)
+        # 3. Utility Buttons
+        btn_frame = Frame(self.root)
+        btn_frame.pack(pady=5)
 
-        self.snapshot_button = Button(button_frame, text="Take Screenshot (in 3s)", command=self.handle_snapshot)
-        self.snapshot_button.pack(side=tk.LEFT, padx=5)
+        self.snap_btn = Button(btn_frame, text="📸 Take Screenshot (3s)", command=self.handle_snapshot)
+        self.snap_btn.pack(side=tk.LEFT, padx=10)
 
-        self.revert_button = Button(button_frame, text="Revert to Original", command=self.handle_revert)
-        self.revert_button.pack(side=tk.LEFT, padx=5)
+        self.revert_btn = Button(btn_frame, text="⏪ Revert to Original", command=self.handle_revert)
+        self.revert_btn.pack(side=tk.LEFT, padx=10)
 
-        self.status_label = Label(self.root, text="Welcome! Take a snapshot to start.", font=("Arial", 12), fg="blue")
-        self.status_label.pack(pady=10)
+        # 4. Status Bar
+        self.status_label = Label(self.root, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
 
-
-    # ---------------------------- UI HELPERS ----------------------------
-    def update_status(self, message, color="blue"):
+    # --- UI HELPERS ---
+    def update_status(self, message, color="black"):
         self.status_label.config(text=message, fg=color)
-        self.root.update_idletasks()
+        self.root.update()
 
-    def load_image_into_ui(self, image_path):
+    def load_image(self, path):
+        if not os.path.exists(path):
+            self.update_status(f"Image not found: {path}", "red")
+            return
+
         try:
-            img = Image.open(image_path)
-            img.thumbnail((800, 550))
+            img = Image.open(path)
+            # Resize for display while keeping aspect ratio
+            img.thumbnail((900, 550), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
-            self.image_label.config(image=photo)
-            self.image_label.image = photo
+            self.image_label.config(image=photo, text="")
+            self.image_label.image = photo # Keep reference
+            self.current_image_path = path
         except Exception as e:
             self.update_status(f"Error loading image: {e}", "red")
 
-
-    # ------------------------------ SNAPSHOT ------------------------------
+    # --- ACTIONS ---
     def handle_snapshot(self):
-        global current_chart_path, original_screenshot_path
-        self.update_status("Taking screenshot in 3 seconds...")
+        self.update_status("Taking screenshot in 3 seconds...", "blue")
+        self.root.update()
         time.sleep(3)
+        
         try:
-            snapshot = ImageGrab.grab()
-            snapshot.save(original_screenshot_path)
-            current_chart_path = original_screenshot_path
-            self.load_image_into_ui(original_screenshot_path)
-            self.update_status("Screenshot captured!", "green")
+            # Capture screen
+            screenshot = ImageGrab.grab()
+            screenshot.save(ORIGINAL_PATH)
+            self.load_image(ORIGINAL_PATH)
+            self.update_status("Screenshot captured successfully.", "green")
         except Exception as e:
             self.update_status(f"Snapshot failed: {e}", "red")
 
-
-    # ------------------------------ REVERT ------------------------------
     def handle_revert(self):
-        global current_chart_path
-        current_chart_path = original_screenshot_path
-        self.load_image_into_ui(current_chart_path)
-        self.update_status("Reverted to original.", "blue")
+        if os.path.exists(ORIGINAL_PATH):
+            self.load_image(ORIGINAL_PATH)
+            self.update_status("Reverted to original screenshot.", "blue")
+        else:
+            self.update_status("No original screenshot found.", "red")
 
-
-    # ------------------------------ MAIN PIPELINE ------------------------------
-    def handle_submit_prompt(self):
-        global current_chart_path
-        
+    def handle_generate(self):
         user_prompt = self.prompt_entry.get()
+        
         if not user_prompt:
-            self.update_status("Prompt empty!", "red")
+            self.update_status("Please enter an instruction.", "red")
             return
-        if not current_chart_path:
-            self.update_status("No screenshot yet!", "red")
+        if not self.current_image_path:
+            self.update_status("Please take a screenshot first.", "red")
             return
 
+        # Disable button to prevent double-click
+        self.generate_btn.config(state=tk.DISABLED)
+        
         try:
-            # ================================
-            # 1) OCR
-            # ================================
-            self.update_status("Step 1/6: Extracting chart text...")
-            ocr_text = self.get_text_from_image(current_chart_path)
-            if not ocr_text:
-                return
-
-            # ================================
-            # 2) Intent Detection
-            # ================================
-            self.update_status("Step 2/6: Analyzing intent...")
+            # 1. INTENT Parsing
+            self.update_status("Analyzing intent...", "blue")
             intent = self.intent_agent.parse(user_prompt)
+            print(f"DEBUG: Parsed Intent: {intent}")
 
-            # ================================
-            # 3) Extract Structured Data
-            # ================================
-            self.update_status("Step 3/6: Extracting chart data...")
-            structured_data = self.data_agent.extract_data(ocr_text)
+            # 2. DATA Extraction (Heuristic/OCR)
+            self.update_status("Extracting context...", "blue")
+            # We pass dummy text since we are relying on Vision mainly now
+            data = self.data_agent.extract_data("Image input used.") 
 
-            # ================================
-            # 4) Planning (decides which agents)
-            # ================================
-            self.update_status("Step 4/6: Planning...")
-            plan = self.planner_agent.create_plan(intent)
-
-            # ================================
-            # 5) Code Generation
-            # ================================
-            self.update_status("Step 5/6: Generating chart code...")
-            generated_code = self.code_agent.generate(structured_data, intent, ocr_text)
-
-            # ================================
-            # SAFETY CHECK
-            # ================================
-            safe, reason = self.safety_agent.review(generated_code)
+            # 3. CODE GENERATION (Vision)
+            self.update_status("Generating Python code (Vision Enabled)...", "blue")
+            # CRITICAL: Pass the image path so the LLM can "see" the chart
+            code = self.code_agent.generate(data, intent, "", image_path=self.current_image_path)
+            
+            # 4. SAFETY CHECK
+            safe, reason = self.safety_agent.review(code)
             if not safe:
-                self.update_status("Unsafe code blocked — requesting fix...", "red")
-                generated_code = self.debug_agent.fix_code(
-                    generated_code,
-                    f"SAFETY FAIL: {reason}"
-                )
+                self.update_status(f"Safety violation: {reason}. Attempting repair...", "orange")
+                code = self.debug_agent.fix_code(code, f"Safety violation: {reason}", intent)
 
-            # ================================
-            # EXECUTE CODE
-            # ================================
-            self.update_status("Executing chart code...")
-            success, new_path, error_log = self.exec_agent.execute(generated_code)
+            # 5. EXECUTION
+            self.update_status("Rendering chart...", "blue")
+            # CRITICAL: Pass explicit output_path to ensure file is found
+            success, result_path, error_msg = self.exec_agent.execute(code, output_path=OUTPUT_PATH)
 
-            # If failed → send to Debug Agent
+            # 6. ERROR RECOVERY LOOP
             if not success:
-                self.update_status("Execution failed — check console.", "red")
-                print("=== EXECUTION ERROR LOG ===")
-                print(error_log)
+                self.update_status("Execution failed. Attempting to fix code...", "orange")
+                print(f"DEBUG: Execution Error: {error_msg}")
+                
+                # Ask Debug Agent to fix it
+                fixed_code = self.debug_agent.fix_code(code, error_msg, intent)
+                success, result_path, error_msg = self.exec_agent.execute(fixed_code, output_path=OUTPUT_PATH)
 
-                self.update_status("Fixing execution error...", "orange")
-                repaired_code = self.debug_agent.fix_code(generated_code, error_log)
-                success, new_path, new_error_log = self.exec_agent.execute(repaired_code)
-                if not success:
-                    self.update_status("Could not fix chart error — check console.", "red")
-                    print("=== SECOND EXECUTION ERROR LOG ===")
-                    print(new_error_log)
-                    return
-            # ================================
-            # QUALITY ENHANCER
-            # ================================
-            self.update_status("Enhancing chart visual quality...")
-            final_path = self.quality_agent.enhance(new_path)
-
-            # ================================
-            # UI SWAP
-            # ================================
-            current_chart_path = final_path
-            self.load_image_into_ui(final_path)
-            self.prompt_entry.delete(0, END)
-            self.update_status("Success!", "green")
+            # 7. FINAL DISPLAY
+            if success:
+                self.load_image(result_path)
+                self.update_status("Chart generated successfully!", "green")
+                self.prompt_entry.delete(0, END)
+            else:
+                self.update_status("Failed to generate chart. Check console for details.", "red")
+                print(f"FINAL ERROR: {error_msg}")
 
         except Exception as e:
-            self.update_status(f"Unexpected error: {e}", "red")
+            self.update_status(f"System Error: {e}", "red")
+            traceback.print_exc()
+        finally:
+            self.generate_btn.config(state=tk.NORMAL)
 
-
-
-    # ------------------------------ OCR ------------------------------
-    def get_text_from_image(self, image_path):
-        try:
-            client = vision.ImageAnnotatorClient()
-            with io.open(image_path, 'rb') as f:
-                content = f.read()
-            image = vision.Image(content=content)
-            response = client.text_detection(image=image)
-            if response.error.message:
-                raise Exception(response.error.message)
-            return response.full_text_annotation.text
-        except Exception as e:
-            self.update_status(f"OCR Error: {e}", "red")
-            return None
-
-
-
-# ------------------------------ RUN ------------------------------
 if __name__ == "__main__":
+    # Ensure cleanup of old temp files (optional)
+    if os.path.exists(OUTPUT_PATH):
+        try: os.remove(OUTPUT_PATH)
+        except: pass
+
     main_window = tk.Tk()
     app = ChartSwapApp(main_window)
     main_window.mainloop()
